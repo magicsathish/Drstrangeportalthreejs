@@ -1,0 +1,6 @@
+{
+  "name": "Doctor Strange Connecting Portal",
+  "description": "A reusable real-time 3D connecting portal engine in Three.js featuring physically traversable bidirectional dimensional gateways between the Mystic Sanctum and the Astral Dimension.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
