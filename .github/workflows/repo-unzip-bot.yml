@@ -2,16 +2,13 @@ name: Mobile Repo Auto-Unzip Bot
 
 on:
   push:
-    paths:
-      - '*.zip' # ரூட்டில் புதிய .zip வரும்போது மட்டுமே இது செயல்படும்
+  workflow_dispatch: # மொபைலில் 'Run workflow' பட்டன் மூலமும் மேனுவலாக இயக்கலாம்
 
 permissions:
   contents: write
 
 jobs:
   unpack-and-structure:
-    # பாட் போடும் கமிட்டால் இதே Unzip Bot மீண்டும் லூப் ஆகாமல் தடுக்க
-    if: "!contains(github.event.head_commit.message, '[skip unzip]')"
     runs-on: ubuntu-latest
 
     steps:
@@ -19,54 +16,54 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # குறிப்பு: ZIP-க்குள் இருக்கும் workflow தானாக உடனே run ஆக வேண்டும் என்றால்,
-          # Repo Settings > Secrets-ல் நீங்கள் ஒரு PAT (Personal Access Token) வைத்திருந்தால்
-          # அதை ${{ secrets.WORKFLOW_TRIGGER_PAT || secrets.GITHUB_TOKEN }} எனப் பயன்படுத்தும்.
           token: ${{ secrets.WORKFLOW_TRIGGER_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Locate, Extract and Preserve Directory Structure
+        id: unzip_step
         run: |
-          # 1. ரூட்டில் இருக்கும் .zip ஃபைலைத் துல்லியமாகக் கண்டறிதல்
+          # 1. ரூட்டில் .zip உள்ளதா எனத் தேடுதல்
           ZIP_NAME=$(find . -maxdepth 1 -name "*.zip" -type f -printf "%f\n" | head -n 1)
 
           if [ -z "$ZIP_NAME" ]; then
-            echo "ரூட்டில் எந்த .zip ஃபைலும் இல்லை. பாட் நிறுத்தப்படுகிறது."
+            echo "ரூட்டில் எந்த .zip ஃபைலும் இல்லை. எக்ஸ்ட்ராக்ஷன் தேவையில்லை."
+            echo "has_zip=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "கண்டறியப்பட்ட ZIP ஃபைல்: $ZIP_NAME"
+          echo "has_zip=true" >> $GITHUB_OUTPUT
+          echo "கண்டறியப்பட்ட ZIP: $ZIP_NAME"
 
-          # 2. தற்காலிக பிரித்தெடுக்கும் ஃபோல்டர் அமைத்தல்
+          # 2. தற்காலிக வொர்க்ஸ்பேஸ்
           TEMP_DIR=".temp_extract_stage"
           rm -rf "$TEMP_DIR"
           mkdir -p "$TEMP_DIR"
 
-          # 3. முழு ஸ்ட்ரக்சருடன் unzip செய்தல்
-          unzip -q "$ZIP_NAME" -d "$TEMP_DIR"
+          # 3. அன்சிப் செய்தல்
+          unzip -q -o "$ZIP_NAME" -d "$TEMP_DIR"
 
-          # 4. ZIP-க்குள் ஒற்றை Main Root Folder இருந்தால் அதைத் தானாகக் கண்டறிந்து Flatten செய்தல்
+          # 4. ஒற்றை Parent Folder இருந்தால் Flatten செய்தல்
           ITEMS_COUNT=$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1 | wc -l)
           FIRST_ITEM=$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1)
 
           SOURCE_DIR="$TEMP_DIR"
           if [ "$ITEMS_COUNT" -eq 1 ] && [ -d "$FIRST_ITEM" ]; then
-            echo "உள்-ஃபோல்டர் கண்டறியப்பட்டது: $(basename "$FIRST_ITEM"). உள்ளடக்கங்கள் நேரடியாக ரூட்டுக்கு நகர்த்தப்படுகின்றன."
+            echo "Parent folder detected: $(basename "$FIRST_ITEM"). Flattening to root..."
             SOURCE_DIR="$FIRST_ITEM"
           fi
 
-          # 5. உங்கள் ஐடியா: அசல் ZIP-ஐ ரீநேம் செய்தல் (இனி .zip என வராது)
+          # 5. அசல் ZIP-ஐ ரீநேம் செய்தல்
           mv "$ZIP_NAME" "${ZIP_NAME}.extracted"
-          echo "ZIP ஃபைல் '${ZIP_NAME}.extracted' என வெற்றிகரமாக மாற்றப்பட்டது."
 
-          # 6. .github, workflows, சப்-ஃபோல்டர்கள் என அனைத்தையும் அசல் ஸ்ட்ரக்சரிலேயே ரூட்டுக்கு நகர்த்துதல்
+          # 6. .github, workflows உட்பட அனைத்தையும் ரூட்டுக்கு நகர்த்துதல்
           shopt -s dotglob nullglob
           cp -rf "$SOURCE_DIR"/* ./
           shopt -u dotglob nullglob
 
-          # 7. தற்காலிக ஃபோல்டரை நீக்குதல்
+          # 7. க்ளீன் அப்
           rm -rf "$TEMP_DIR"
 
       - name: Commit Extracted Structure to Root
+        if: steps.unzip_step.outputs.has_zip == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -74,10 +71,9 @@ jobs:
           git add -A
 
           if git diff-index --quiet HEAD; then
-            echo "புதிய மாற்றங்கள் எதுவும் இல்லை."
+            echo "கமிட் செய்ய புதிய மாற்றங்கள் இல்லை."
           else
-            # [skip unzip] போடுவதால் இந்த Unzip Bot மட்டும் மீண்டும் இயங்காது; 
-            # ஆனால் உங்கள் ZIP-க்குள் இருக்கும் எந்த யாமலும் இதன் மூலம் பாதிக்கப்படாது!
-            git commit -m "Auto-unpacked archive structure to root and renamed zip [skip unzip]"
+            git commit -m "Auto-unpacked archive structure to root and renamed zip"
             git push origin ${{ github.ref_name }}
           fi
+          
